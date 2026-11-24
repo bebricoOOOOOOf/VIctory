@@ -1175,18 +1175,25 @@ impl<'a> Lower<'a> {
                 let bit = self.boolean(m, at);
                 self.balloting.remove(&lo);
                 let bit = bit?;
-                let i32t = self.s.t.i32;
-                let four = self.s.m.named_struct("dx.types.fouri32", vec![i32t; 4]);
-                let r = self
-                    .s
-                    .op(at, "waveActiveBallot", Attr::NoUnwind, four, 116, &[bit]);
-                self.s.flags |= flags::WAVE_OPS;
-                let xy = (self.s.m.extract(at, r, 0), self.s.m.extract(at, r, 1));
+                let xy = self.wave_ballot(at, bit);
                 self.ballots.insert(lo, xy);
                 xy
             }
         };
         Ok(if high { y } else { x })
+    }
+
+    fn wave_ballot(&mut self, at: usize, bit: V) -> (V, V) {
+        let i32t = self.s.t.i32;
+        let four = self.s.m.named_struct("dx.types.fouri32", vec![i32t; 4]);
+        let ballot = self
+            .s
+            .op(at, "waveActiveBallot", Attr::NoUnwind, four, 116, &[bit]);
+        self.s.flags |= flags::WAVE_OPS;
+        (
+            self.s.m.extract(at, ballot, 0),
+            self.s.m.extract(at, ballot, 1),
+        )
     }
 
     // ---- operands ----
@@ -1591,6 +1598,10 @@ impl<'a> Lower<'a> {
             111,
             &[],
         );
+        self.mask_bit(at, lane, lo, hi)
+    }
+
+    fn mask_bit(&mut self, at: usize, lane: V, lo: V, hi: Option<V>) -> V {
         let (k31, k32, one, z) = (
             self.s.m.i32(31),
             self.s.m.i32(32),
@@ -2057,6 +2068,18 @@ impl<'a> Lower<'a> {
             };
             let r = if mesh_quad {
                 self.quad_pick(x, src)
+            } else if self.mask_data == MaskData::Console {
+                // DS_SWIZZLE reads zero from sources disabled by EXEC
+                // (RDNA2 ISA §12.13.1). The ballot also excludes absent
+                // host lanes. Read our own lane when the chosen source is
+                // absent: WaveReadLaneAt on an inactive lane is undefined.
+                let enabled = guard.unwrap_or_else(|| self.s.m.bool(true));
+                let (lo, hi) = self.wave_ballot(c, enabled);
+                let source_active = self.mask_bit(c, src, lo, Some(hi));
+                let safe_src = self.s.m.select(c, source_active, src, lane);
+                let value = self.read_lane(x, safe_src);
+                let zero = self.s.m.i32(0);
+                self.s.m.select(c, source_active, value, zero)
             } else {
                 self.read_lane(x, src)
             };
@@ -6556,6 +6579,10 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "swizzle_tests.rs"]
+mod swizzle_tests;
 
 #[cfg(test)]
 mod tests {

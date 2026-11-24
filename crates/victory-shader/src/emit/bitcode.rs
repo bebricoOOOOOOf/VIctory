@@ -7,6 +7,10 @@
 
 use std::collections::HashMap;
 
+#[cfg(test)]
+#[path = "wave_eval.rs"]
+pub(crate) mod wave_eval;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct Ty(u32);
 
